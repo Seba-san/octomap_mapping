@@ -48,12 +48,12 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_octree(NULL),
   m_maxRange(-1.0),
   m_minRange(-1.0),
-  m_worldFrameId("map"), m_baseFrameId("base_footprint"),
+  m_worldFrameId("/map"), m_baseFrameId("base_footprint"),
   m_useHeightMap(true),
   m_useColoredMap(false),
   m_colorFactor(0.8),
   m_latchedTopics(true),
-  m_publishFreeSpace(false),
+  m_publishFreeSpace(true),
   m_res(0.05),
   m_treeDepth(0),
   m_maxTreeDepth(0),
@@ -153,7 +153,7 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("color_free/r", r, 0.0);
   m_nh_private.param("color_free/g", g, 1.0);
   m_nh_private.param("color_free/b", b, 0.0);
-  m_nh_private.param("color_free/a", a, 1.0);
+  m_nh_private.param("color_free/a", a, 0.2);
   m_colorFree.r = r;
   m_colorFree.g = g;
   m_colorFree.b = b;
@@ -171,6 +171,7 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_binaryMapPub = m_nh.advertise<Octomap>("octomap_binary", 1, m_latchedTopics);
   m_fullMapPub = m_nh.advertise<Octomap>("octomap_full", 1, m_latchedTopics);
   m_pointCloudPub = m_nh.advertise<sensor_msgs::PointCloud2>("octomap_point_cloud_centers", 1, m_latchedTopics);
+  m_pointCloudPub_free = m_nh.advertise<sensor_msgs::PointCloud2>("octomap_point_cloud_centers_free", 1, m_latchedTopics);
   m_mapPub = m_nh.advertise<nav_msgs::OccupancyGrid>("projected_map", 5, m_latchedTopics);
   m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
 
@@ -494,6 +495,7 @@ void OctomapServer::publishProjected2DMap(const ros::Time& rostime) {
   }
 }
 
+
 void OctomapServer::publishAll(const ros::Time& rostime){
   ros::WallTime startTime = ros::WallTime::now();
   size_t octomapSize = m_octree->size();
@@ -506,6 +508,7 @@ void OctomapServer::publishAll(const ros::Time& rostime){
   bool publishFreeMarkerArray = m_publishFreeSpace && (m_latchedTopics || m_fmarkerPub.getNumSubscribers() > 0);
   bool publishMarkerArray = (m_latchedTopics || m_markerPub.getNumSubscribers() > 0);
   bool publishPointCloud = (m_latchedTopics || m_pointCloudPub.getNumSubscribers() > 0);
+  bool publishPointCloud_free = (m_latchedTopics || m_pointCloudPub_free.getNumSubscribers() > 0);
   bool publishBinaryMap = (m_latchedTopics || m_binaryMapPub.getNumSubscribers() > 0);
   bool publishFullMap = (m_latchedTopics || m_fullMapPub.getNumSubscribers() > 0);
 
@@ -652,10 +655,6 @@ void OctomapServer::publishAll(const ros::Time& rostime){
       occupiedNodesVis.markers[i].scale.x = size;
       occupiedNodesVis.markers[i].scale.y = size;
       occupiedNodesVis.markers[i].scale.z = size;
-      occupiedNodesVis.markers[i].pose.orientation.x=0;
-      occupiedNodesVis.markers[i].pose.orientation.y=0;
-      occupiedNodesVis.markers[i].pose.orientation.z=0;
-      occupiedNodesVis.markers[i].pose.orientation.w=1;
       if (!m_useColoredMap)
         occupiedNodesVis.markers[i].color = m_color;
 
@@ -693,6 +692,23 @@ void OctomapServer::publishAll(const ros::Time& rostime){
     }
 
     m_fmarkerPub.publish(freeNodesVis);
+    pcl::PointCloud<pcl::PointXYZ> pclCloud;
+
+    // Convert freeNodesVis markers to pcl::PointXYZ points and add to pclCloud
+    for (const auto& marker : freeNodesVis.markers) {
+        for (const auto& point : marker.points) {
+            pclCloud.push_back(pcl::PointXYZ(point.x, point.y, point.z));
+        }
+    }
+
+    // Convert pcl::PointCloud to sensor_msgs::PointCloud2
+    sensor_msgs::PointCloud2 cloudMsg;
+    pcl::toROSMsg(pclCloud, cloudMsg);
+    cloudMsg.header.frame_id = m_worldFrameId;
+    cloudMsg.header.stamp = rostime;
+
+    // Publish the PointCloud2 message
+    m_pointCloudPub_free.publish(cloudMsg);
   }
 
 
@@ -928,7 +944,7 @@ void OctomapServer::filterGroundPlane(const PCLPointCloud& pc, PCLPointCloud& gr
       second_pass.setInputCloud(pc.makeShared());
       second_pass.filter(ground);
 
-      second_pass.setNegative (true);
+      second_pass.setFilterLimitsNegative (true);
       second_pass.filter(nonground);
     }
 
